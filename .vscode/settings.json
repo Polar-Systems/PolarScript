@@ -47,9 +47,15 @@
     ],
     "Lua.runtime.pathStrict": true,
     "Lua.workspace.library": [
-        "/",
+        "/home/filip/Dokument/Kodning/PolarSystems/PolarScript/",
         "/home/filip/.vscode/extensions/nameouschangey.lifeboatapi-0.0.33/assets/lua/Common/",
         "/home/filip/.vscode/extensions/nameouschangey.lifeboatapi-0.0.33/assets/lua/Addon/",
-        "/_build/libs/"
+        "/home/filip/Dokument/Kodning/PolarSystems/PolarScript/_build/libs/"
+    ],
+    "lifeboatapi.stormworks.libs.gitLibraries": [
+        {
+            "name": "LifeBoatAPI",
+            "gitUrl": "https://github.com/nameouschangey/Stormworks_LifeBoatAPI_Addon.git"
+        }
     ]
 }
