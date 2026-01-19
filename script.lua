@@ -17,8 +17,25 @@ local UI_Y_MAIN = 0.75
 local UI_Y_ADMIN = 0
 local lastXYZ = {}
 local lastSpeedKmh = {}
-local SPEED_TICKS = 60
+local SPEED_TICKS = 1
 local speedTimer = 0
+
+local function buildUiAdmin(peer_id)
+    local pd = g_savedata.playerdata[tostring(peer_id)] or {}
+
+    local trackedGroups = 0
+    for _ in pairs(groups) do trackedGroups = trackedGroups + 1 end
+
+    local pending = 0
+    for _ in pairs(pendingApply) do pending = pending + 1 end
+
+    return
+        "Admin\n" ..
+        "Auth " .. tostring(pd.authed == true) .. "\n" ..
+        "AS " .. tostring(pd.as ~= false) .. " PVP " .. tostring(pd.pvp == true) .. "\n" ..
+        "Groups " .. tostring(trackedGroups) .. "\n" ..
+        "Pending " .. tostring(pending)
+end
 
 local function getMatrixPos(m)
     if not m then return 0, 0, 0 end
