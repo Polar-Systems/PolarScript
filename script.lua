@@ -20,8 +20,24 @@ local lastSpeedKmh = {}
 local SPEED_TICKS = 1
 local speedTimer = 0
 
+local function getPD(peer_id)
+    local key = tostring(peer_id)
+    g_savedata.playerdata[key] = g_savedata.playerdata[key] or {}
+
+    local pd = g_savedata.playerdata[key]
+    if pd.authed == nil then pd.authed = false end
+    if pd.as == nil then pd.as = true end
+    if pd.pvp == nil then pd.pvp = false end
+    if pd.ui == nil then pd.ui = true end
+    if pd.is_admin == nil then pd.is_admin = false end
+
+    return pd, key
+end
+
+local function onOff(v) return v and "ON" or "OFF" end
+
 local function buildUiAdmin(peer_id)
-    local pd = g_savedata.playerdata[tostring(peer_id)] or {}
+    local pd = getPD(peer_id)
 
     local trackedGroups = 0
     for _ in pairs(groups) do trackedGroups = trackedGroups + 1 end
@@ -30,11 +46,11 @@ local function buildUiAdmin(peer_id)
     for _ in pairs(pendingApply) do pending = pending + 1 end
 
     return
-        "Admin\n" ..
-        "Auth " .. tostring(pd.authed == true) .. "\n" ..
-        "AS " .. tostring(pd.as ~= false) .. " PVP " .. tostring(pd.pvp == true) .. "\n" ..
-        "Groups " .. tostring(trackedGroups) .. "\n" ..
-        "Pending " .. tostring(pending)
+        "ADMIN\n" ..
+        "Auth: " .. onOff(pd.authed) .. "\n" ..
+        "AS: " .. onOff(pd.as ~= false) .. "  PVP: " .. onOff(pd.pvp) .. "\n" ..
+        "Groups: " .. trackedGroups .. "\n" ..
+        "Pending: " .. pending
 end
 
 local function getMatrixPos(m)
@@ -75,11 +91,11 @@ local function buildUiMain(peer_id)
 
     return
         SERVER_NAME .. "\n" ..
-        "TPS " .. string.format("%.1f", tpsNow) .. " avg " .. string.format("%.1f", tpsAvg) .. "\n" ..
-        "Vehicles " .. tostring(vehicles) .. "\n" ..
-        "Speed " .. string.format("%.1f", speedKmh) .. " km/h\n" ..
-        "X " .. string.format("%.1f", xyz.x) .. " Z " .. string.format("%.1f", xyz.z) .. "\n" ..
-        "Alt " .. string.format("%.1f", xyz.y)
+        ("TPS: %.1f  AVG: %.1f\n"):format(tpsNow, tpsAvg) ..
+        "Vehicles: " .. vehicles .. "\n" ..
+        ("Speed: %.1f km/h\n"):format(speedKmh) ..
+        ("X: %.1f  Z: %.1f\n"):format(xyz.x, xyz.z) ..
+        ("Alt: %.1f"):format(xyz.y)
 end
 
 local function updateUiFor(peer_id, is_show)
@@ -250,11 +266,7 @@ function onTick(game_ticks)
             g_savedata.playerdata[key] = g_savedata.playerdata[key] or {}
             local pd = g_savedata.playerdata[key]
 
-            if pl.admin ~= nil then
-                pd.is_admin = (pl.admin == true or pl.admin == 1)
-            elseif pl.is_admin ~= nil then
-                pd.is_admin = (pl.is_admin == true or pl.is_admin == 1)
-            end
+            pd.is_admin = (pl.admin == true or pl.admin == 1)
 
             local show = pd.ui
             if show == nil then show = true end
