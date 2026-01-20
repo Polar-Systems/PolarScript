@@ -19,19 +19,76 @@ local lastXYZ = {}
 local lastSpeedKmh = {}
 local SPEED_TICKS = 1
 local speedTimer = 0
+local DBG_ON = true
+local DBG_COOLDOWN_TICKS = 60
+local dbgLast = {}
+local UI_CENTER = 9003
+local UI_X_CENTER = 0
+local UI_Y_CENTER = 0
+
+local function dbg(peer_id, tag, text)
+    if not DBG_ON then return end
+    local t = server.getTimeMillisec() or 0
+    dbgLast[peer_id] = dbgLast[peer_id] or {}
+    local last = dbgLast[peer_id][tag] or -999999
+    if (t - last) < (DBG_COOLDOWN_TICKS * 1000 / 60) then return end
+    dbgLast[peer_id][tag] = t
+    server.announce("[DBG]", text, peer_id)
+end
 
 local function getPD(peer_id)
     local key = tostring(peer_id)
     g_savedata.playerdata[key] = g_savedata.playerdata[key] or {}
-
     local pd = g_savedata.playerdata[key]
     if pd.authed == nil then pd.authed = false end
-    if pd.as == nil then pd.as = true end
-    if pd.pvp == nil then pd.pvp = false end
     if pd.ui == nil then pd.ui = true end
     if pd.is_admin == nil then pd.is_admin = false end
+    return pd
+end
 
-    return pd, key
+local function getRankText(pd)
+    if pd.is_admin then return "ADMIN" end
+    if pd.authed then return "AUTHED" end
+    return "GUEST"
+end
+
+local function getPlaytimeText(pd)
+    local s = pd.playtime_s or 0
+    local m = math.floor(s / 60)
+    local h = math.floor(m / 60)
+    m = m % 60
+    return tostring(h) .. "h " .. tostring(m) .. "m"
+end
+
+local function countMyGroups(peer_id)
+    local n = 0
+    for _, data in pairs(groups) do
+        if data.owner == peer_id then n = n + 1 end
+    end
+    return n
+end
+
+
+local function buildCenter(peer_id)
+    local pd = getPD(peer_id)
+    if pd.authed then return "" end
+
+    return
+        "==<" .. SERVER_NAME .. ">==\n" ..
+        "You are NOT authed\n" ..
+        "Type ?auth to enable commands\n" ..
+        "Tip: ?help"
+end
+
+local function updateCenter(peer_id)
+    local pd = getPD(peer_id)
+
+    if pd.authed then
+        server.setPopupScreen(peer_id, UI_CENTER, "Auth", false, "", UI_X_CENTER, UI_Y_CENTER)
+        return
+    end
+
+    server.setPopupScreen(peer_id, UI_CENTER, "Auth", true, buildCenter(peer_id), UI_X_CENTER, UI_Y_CENTER)
 end
 
 local function onOff(v) return v and "ON" or "OFF" end
@@ -85,17 +142,22 @@ local function countTrackedVehicles()
 end
 
 local function buildUiMain(peer_id)
-    local vehicles = countTrackedVehicles()
+    local pd = getPD(peer_id)
     local xyz = lastXYZ[peer_id] or { x = 0, y = 0, z = 0 }
     local speedKmh = lastSpeedKmh[peer_id] or 0
+    local myGroups = countMyGroups(peer_id)
 
     return
-        SERVER_NAME .. "\n" ..
-        ("TPS: %.1f  AVG: %.1f\n"):format(tpsNow, tpsAvg) ..
-        "Vehicles: " .. vehicles .. "\n" ..
-        ("Speed: %.1f km/h\n"):format(speedKmh) ..
-        ("X: %.1f  Z: %.1f\n"):format(xyz.x, xyz.z) ..
-        ("Alt: %.1f"):format(xyz.y)
+        "==<" .. SERVER_NAME .. ">==\n" ..
+        "TPS:\n" ..
+        "Average TPS:\n" ..
+        "============\n" ..
+        "Groups: " .. tostring(myGroups) .. "\n" ..
+        "Speed: " .. string.format("%.1f", speedKmh) .. " km/h\n" ..
+        "Altitude: " .. string.format("%.1f", xyz.y) .. "\n" ..
+        "============\n" ..
+        "Rank: " .. getRankText(pd) .. "\n" ..
+        "Playtime: " .. getPlaytimeText(pd)
 end
 
 local function updateUiFor(peer_id, is_show)
@@ -264,13 +326,15 @@ function onTick(game_ticks)
         for _, pl in pairs(server.getPlayers()) do
             local key = tostring(pl.id)
             g_savedata.playerdata[key] = g_savedata.playerdata[key] or {}
-            local pd = g_savedata.playerdata[key]
+            local pd = getPD(pl.id)
+            pd.playtime_s = (pd.playtime_s or 0) + (game_ticks / 60)
 
             pd.is_admin = (pl.admin == true or pl.admin == 1)
 
             local show = pd.ui
             if show == nil then show = true end
             updateUiFor(pl.id, show)
+            updateCenter(pl.id)
         end
     end
 end
@@ -293,9 +357,11 @@ function onPlayerJoin(steam_id, name, peer_id, admin, auth)
     server.announce("[Server]", "Type ?auth", peer_id)
 
     updateUiFor(peer_id, true)
+    updateCenter(peer_id)
 end
 
 function onPlayerLeave(steam_id, name, peer_id, admin, auth)
+    server.removePopup(peer_id, UI_CENTER)
     server.removePopup(peer_id, UI_MAIN)
     server.removePopup(peer_id, UI_ADMIN)
     server.announce("[Server]", name .. " left the game")
@@ -365,17 +431,21 @@ function onCustomCommand(full_message, user_peer_id, is_admin, is_auth, command,
     end
 
     if command == "?auth" then
-        g_savedata.playerdata[tostring(user_peer_id)] = g_savedata.playerdata[tostring(user_peer_id)] or {}
-        g_savedata.playerdata[tostring(user_peer_id)].authed = true
+        local pd = getPD(user_peer_id)
+        pd.authed = true
         server.addAuth(user_peer_id)
+        updateCenter(user_peer_id)
         server.announce("[Server]", "You are authed", user_peer_id)
+        return
     end
 
     if command == "?noworkshop" then
-        g_savedata.playerdata[tostring(user_peer_id)] = g_savedata.playerdata[tostring(user_peer_id)] or {}
-        g_savedata.playerdata[tostring(user_peer_id)].authed = false
+        local pd = getPD(user_peer_id)
+        pd.authed = false
         server.removeAuth(user_peer_id)
+        updateCenter(user_peer_id)
         server.announce("[Server]", "Workshop disabled", user_peer_id)
+        return
     end
 
     if command == "?as" or command == "?antisteal" then
