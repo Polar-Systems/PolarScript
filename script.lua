@@ -13,7 +13,7 @@ local SERVER_NAME = "My Server"
 local tpsNow = 60
 local tpsAvg = 60
 local UI_X = -0.9
-local UI_Y_MAIN = 0.75
+local UI_Y_MAIN = 0.7
 local UI_Y_ADMIN = 0
 local lastXYZ = {}
 local lastSpeedKmh = {}
@@ -152,7 +152,7 @@ local function buildUiMain(peer_id)
         "TPS:\n" ..
         "Average TPS:\n" ..
         "============\n" ..
-        "Groups: " .. tostring(myGroups) .. "\n" ..
+        "Vehicles: " .. tostring(myGroups) .. "\n" ..
         "Speed: " .. string.format("%.1f", speedKmh) .. " km/h\n" ..
         "Altitude: " .. string.format("%.1f", xyz.y) .. "\n" ..
         "============\n" ..
@@ -204,8 +204,8 @@ local function buildTooltip(vehicle_id, ownerPeer, group_id)
         "Owner: " .. tostring(ownerPeer) ..
         "\nVehicle ID: " .. tostring(vehicle_id) ..
         "\nGroup ID: " .. tostring(group_id) ..
-        "\nAntisteal: " .. tostring(as) ..
-        "\nPVP: " .. tostring(pvp)
+        "\nAntiSteal: " .. tostring(as) ..
+        "\nPvP: " .. tostring(pvp)
 end
 
 local function applyVehicleSettings(vehicle_id, ownerPeer, group_id)
@@ -354,7 +354,7 @@ function onPlayerJoin(steam_id, name, peer_id, admin, auth)
     pd.ui = true
 
     server.removeAuth(peer_id)
-    server.announce("[Server]", "Type ?auth", peer_id)
+    server.announce("[Server]", "Type ?auth to get auth!", peer_id)
 
     updateUiFor(peer_id, true)
     updateCenter(peer_id)
@@ -418,7 +418,7 @@ function onCustomCommand(full_message, user_peer_id, is_admin, is_auth, command,
         pd.pvp = not cur
         g_savedata.playerdata[tostring(user_peer_id)] = pd
 
-        server.announce("[Server]", "pvp = " .. tostring(pd.pvp), user_peer_id)
+        server.announce("[Server]", "PvP = " .. tostring(pd.pvp), user_peer_id)
 
         for groupIdStr, data in pairs(groups) do
             if data.owner == user_peer_id then
@@ -455,7 +455,7 @@ function onCustomCommand(full_message, user_peer_id, is_admin, is_auth, command,
         pd.as = not current
         g_savedata.playerdata[tostring(user_peer_id)] = pd
 
-        server.announce("[Server]", "antisteal = " .. tostring(pd.as), user_peer_id)
+        server.announce("[Server]", "Antisteal = " .. tostring(pd.as), user_peer_id)
 
         for groupIdStr, data in pairs(groups) do
             if data.owner == user_peer_id then
@@ -487,7 +487,7 @@ function onCustomCommand(full_message, user_peer_id, is_admin, is_auth, command,
 
 
 
-        server.announce("[Server]", "despawned " .. tostring(despawned) .. " groups", me)
+        server.announce("[Server]", "Despawned " .. tostring(despawned) .. " groups", me)
     end
 
     if command == "?dbg" then
