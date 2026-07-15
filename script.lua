@@ -8,31 +8,6 @@
 --]]
 
 
-
---[[
-PolarScript server addon.
-
-Handles auth (no-workshop server, self-built vehicles only), vehicle limits,
-antisteal/PvP toggles, an antilag system that despawns oversized creations,
-warn/kick/ban moderation, a live debug log stream, map markers, and a small
-set of admin tools.
-
-Two things worth knowing before touching this file:
-
-1. Vehicle titles can't be read. server.getVehicleName was pulled from the
-   addon API in the Space DLC update and hasn't come back. The "MADE BY"
-   ownership check only sees component NAME fields typed in the editor, not
-   a vehicle's actual saved title or a sign's displayed text.
-
-2. server.httpGet only reaches localhost on the machine running the server.
-   The verified/admin access lists and the Discord warn webhook need a small
-   local relay server running on the same box to actually reach the internet.
-   See CONFIG.HTTP_* below.
-
-playtime, pvp, and warn/kick counts persist in g_savedata (keyed by steam_id).
-Everything else resets on reload.
-]]
-
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- CONFIG
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -67,7 +42,6 @@ local CONFIG                 = {
     LAG_AGE_WEIGHT                 = 0.5,
     LAG_AGE_DECAY                  = 600,
 
-    -- Untuned guess, retune from real ?dbg readings.
     LAG_MAX_COST                   = 240000,
 
     MAX_SUBBODIES_PER_GROUP        = 25,
@@ -78,8 +52,6 @@ local CONFIG                 = {
 
     LAG_SPAWN_GRACE_SEC            = 5.0,
 
-    -- Two tiers: below NORMAL_TPS despawns the single worst group, below CRITICAL_TPS
-    -- sustained for CRITICAL_SUSTAIN_SEC despawns everything at once.
     ANTILAG_NORMAL_TPS             = 40,
     ANTILAG_CRITICAL_TPS           = 10,
     ANTILAG_CRITICAL_SUSTAIN_SEC   = 5,
@@ -94,13 +66,11 @@ local CONFIG                 = {
     MAX_LIMIT                      = 10,
     CLEAN_VEHICLES_ON_LOAD         = true,
 
-    -- No API to scan the whole map, so ?flares can only retry drops this script has seen.
     AUTO_DESPAWN_DROPPED_EQUIPMENT = true,
 
     WARNS_BEFORE_KICK              = 3,
     KICKS_BEFORE_BAN               = 3,
 
-    -- server.httpGet only reaches localhost; needs a local relay server on HTTP_PORT to reach the internet.
     HTTP_ENABLED                   = false,
     HTTP_PORT                      = 8080,
     HTTP_PATH_VERIFIED             = "/verified",
@@ -108,7 +78,6 @@ local CONFIG                 = {
     HTTP_PATH_WARN                 = "/warn",
     HTTP_POLL_SEC                  = 60,
 
-    -- Keys MUST be quoted STRINGS ("76561198...") -- a bare numeric key silently never matches.
     OWNERS                         = { ["76561198305443102"] = true },
     ADMINS                         = {},
     MODERATORS                     = {},
@@ -123,7 +92,6 @@ local CONFIG                 = {
     ECONOMY_STARTING_BALANCE       = 500,
     PAYREQUEST_TTL_SEC             = 300,
 
-    -- No API to detect a real trailer -- jobs verify by mass parked at the destination instead.
     CARGO_PAYOUT_BASE              = 50,
     CARGO_PAYOUT_PER_KM            = 8,
     CARGO_PAYOUT_CAP               = 600,
@@ -133,7 +101,6 @@ local CONFIG                 = {
     CARGO_DELIVERY_RADIUS          = 40.0,
     CARGO_COOLDOWN_SEC             = 60,
 
-    -- Purely a visual marker on ?cargo accept -- delivery is still verified by mass. 0 = disabled.
     CARGO_CONTAINER_COMPONENT_ID   = 0,
 
     FUEL_PRICE_PER_UNIT            = 2,
@@ -144,7 +111,6 @@ local CONFIG                 = {
     TOOL_PRICE_ITEM                = 40,
 }
 
--- Stored normalized (lowercase a-z, after leet substitution), whole-word match only.
 local SLURS                  = {
     ["nigger"] = true,
     ["nigga"]  = true,
@@ -156,7 +122,6 @@ local SLURS                  = {
     ["kike"]   = true,
 }
 
--- Only server.notify() toasts can be colored. IDs are undocumented, inferred from testing.
 local NOTIFY                 = {
     GREEN  = 4,
     YELLOW = 2,
@@ -164,12 +129,10 @@ local NOTIFY                 = {
     RED    = 3,
 }
 
--- TAJIN is an image-to-vehicle converter that tags its own output this way, not a stolen build.
 local MADE_BY_EXCEPTIONS     = {
     ["TAJIN"] = true,
 }
 
--- ?tp location list; array index is the id a player types.
 local TELEPORT_NAMES_DLC     = {
     "Multiplayer Hangar", "Multiplayer Dock", "Creative Island", "ONeill", "Harrison",
     "North Harbour Terminal", "North Harbour Dock", "Arctic Hangar", "Arctic Dock",
@@ -186,7 +149,6 @@ local TELEPORT_NAMES         = {
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 local UI_MAIN                = 9001
 local UI_CENTER              = 9003
--- LEGACY, kept only to clear stale client popups.
 local UI_COUNTDOWN           = 9005
 local UI_ANTILAG_NORMAL      = 9006
 local UI_ANTILAG_CRITICAL    = 9007
@@ -198,7 +160,6 @@ local UI_Y_CENTER            = 0.0
 local UI_X_COUNTDOWN         = 0.0
 local UI_Y_COUNTDOWN         = 0.15
 
--- Smaller Y = lower on screen in this UI system.
 local UI_X_ANTILAG_NORMAL    = UI_X_MAIN
 local UI_Y_ANTILAG_NORMAL    = UI_Y_MAIN - 0.60
 local UI_X_ANTILAG_CRITICAL  = UI_X_MAIN
@@ -207,9 +168,6 @@ local UI_Y_ANTILAG_CRITICAL  = UI_Y_MAIN - 0.50
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- STATE (in-memory)
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- players:  [peer_id] = { steam_id, name, is_admin, authed, ui, pvp, antisteal, limit, speed, alt, last_pos }
--- groups:   [group_id] = { owner_steam, vehicles={[vid]=true}, bodyCount, spawn_tick, cost, voxels, announced }
--- bodyCount is a LIVE counter, never recompute it by looping g.vehicles.
 local players                = {}
 local steamToPeer            = {}
 local groups                 = {}
@@ -220,17 +178,13 @@ local pendingApply           = {}
 local popupCache             = {}
 local frozen                 = {}
 local nukeQueue              = {}
--- blockedGroups: group failed a hard limit, stays blocked for every straggler sub-body too.
 local blockedGroups          = {}
 local looseEquipment         = {}
--- pendingDestroy: [group_id] = { deadline_ms, ownerPeer, ownerName, publicReason, ownerReason }.
 local pendingDestroy         = {}
--- pendingVtpVerify: [group_id] = { peer_id, target, beforePos, repVid, verify_ms }.
 local pendingVtpVerify       = {}
 
 local verifiedSet            = {}
 local adminSet               = {}
--- httpQueue drains 1 request/tick -- SW allows 1 httpGet/tick.
 local httpQueue              = {}
 local teleportCache          = nil
 local cargoZoneCache         = nil
@@ -252,10 +206,8 @@ local tpsLastMs              = 0
 local tpsNow                 = 60
 local tpsAvg                 = 60
 local startMs                = 0
--- Runtime override for CONFIG.ANTILAG_NORMAL_TPS, set via ?antilag <n>; nil = use config default.
 local antilagNormalTps       = nil
 local criticalWasHealthy     = true
--- Wall-clock ms when tps first dropped below ANTILAG_CRITICAL_TPS.
 local criticalSinceMs        = 0
 local antilagNormalUiShown   = false
 local antilagCriticalUiShown = false
@@ -263,7 +215,6 @@ local antilagCriticalUiShown = false
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- PERSISTENT STATE
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- All keyed by steam_id. warns resets to 0 on auto-kick; kicks is a lifetime count.
 g_savedata                   = g_savedata or {}
 g_savedata.playtime          = g_savedata.playtime or {}
 g_savedata.pvp               = g_savedata.pvp or {}
@@ -283,13 +234,14 @@ local function notify(peer_id, title, msg, kind)
     server.notify(peer_id, title, msg, NOTIFY[kind] or NOTIFY.YELLOW)
 end
 
+-- Broadcasts a colored toast to every currently connected player.
 local function broadcastNotify(title, msg, kind)
     for peer_id in pairs(players) do
         notify(peer_id, title, msg, kind)
     end
 end
 
--- Leveled debug stream, per-admin via "?dbg <0-5>". Cumulative: level N shows everything <= N.
+-- Sends a leveled debug message to admins whose debug level meets the threshold.
 local function dbgLog(level, tag, msg)
     for peer_id, p in pairs(players) do
         if p.is_admin and (p.dbgLevel or 0) >= level then
@@ -298,8 +250,7 @@ local function dbgLog(level, tag, msg)
     end
 end
 
--- No pcall in this sandbox, so a call to a missing server function is an uncatchable crash;
--- checking the type first turns that into a logged no-op instead.
+-- Calls a server.* API function only if it exists on this build, warning admins and returning false otherwise.
 local function safeServer(fnName, ...)
     local fn = server[fnName]
     if type(fn) ~= "function" then
@@ -316,7 +267,7 @@ local function safeServer(fnName, ...)
     return true
 end
 
--- Same guard as safeServer, but keeps the return value.
+-- Like safeServer but also returns the wrapped call's result value(s).
 local function safeServerQuery(fnName, ...)
     local fn = server[fnName]
     if type(fn) ~= "function" then
@@ -338,7 +289,6 @@ end
 
 local function fmtCost(c) return string.format("%.0f", c or 0) end
 
--- Defined here (not down in ECONOMY) so it's in scope for requestVtpTeleport() further up.
 local function dist3(a, b)
     local dx, dy, dz = a[1] - b[1], a[2] - b[2], a[3] - b[3]
     return math.sqrt(dx * dx + dy * dy + dz * dz)
@@ -351,8 +301,7 @@ local function getP(peer_id) return players[peer_id] end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 local function fmtMoney(n) return string.format("%.0f", n or 0) end
 
--- Lazily seeds a new steam_id at CONFIG.ECONOMY_STARTING_BALANCE on first read -- every
--- other wallet function routes through this rather than touching g_savedata.wallet directly.
+-- Reads a player's wallet balance, initializing it to the configured starting amount on first access.
 local function getBalance(steam_id)
     g_savedata.wallet = g_savedata.wallet or {}
     if g_savedata.wallet[steam_id] == nil then
@@ -365,18 +314,18 @@ local function hasBalance(steam_id, amount)
     return getBalance(steam_id) >= (amount or 0)
 end
 
+-- Sets a player's wallet balance, clamped to a minimum of zero.
 local function setBalance(steam_id, amount)
     g_savedata.wallet = g_savedata.wallet or {}
     g_savedata.wallet[steam_id] = math.max(0, amount or 0)
     return g_savedata.wallet[steam_id]
 end
 
--- Clamped at 0, never lets a balance go negative.
 local function addBalance(steam_id, amount)
     return setBalance(steam_id, getBalance(steam_id) + (amount or 0))
 end
 
--- Deducts only if funds are sufficient; callers must check the return value.
+-- Subtracts from a player's balance only if they can afford it, returns false otherwise.
 local function deductBalance(steam_id, amount)
     if not hasBalance(steam_id, amount) then return false end
     g_savedata.wallet[steam_id] = getBalance(steam_id) - amount
@@ -387,12 +336,11 @@ local function isModerator(p)
     return p ~= nil and CONFIG.MODERATORS[p.steam_id] == true
 end
 
--- The only tier that can touch root access.
 local function isOwner(p)
     return p ~= nil and CONFIG.OWNERS[p.steam_id] == true
 end
 
--- Rank string, used on the map marker. OWNER > ADMIN > MODERATOR > PLAYER (authed) > GUEST.
+-- Resolves a player's display rank by checking owner, admin, moderator, then authed status in priority order.
 local function rankOf(p)
     if not p then return "GUEST" end
     if CONFIG.OWNERS[p.steam_id] then return "OWNER" end
@@ -402,7 +350,7 @@ local function rankOf(p)
     return "GUEST"
 end
 
--- Only ever grants access, never revokes.
+-- Grants admin/auth status to a peer based on the configured owner/admin/verified sets and syncs it to the server.
 local function applyAccess(peer_id)
     local p = players[peer_id]
     if not p then return end
@@ -428,7 +376,7 @@ local function applyAccessToAll()
     for peer_id in pairs(players) do applyAccess(peer_id) end
 end
 
--- Format-agnostic: a steam64 id is always a 17-digit number, so any 17+ digit run matches.
+-- Extracts steam64 IDs (17+ digit numbers) from an HTTP reply body into a lookup set.
 local function parseSteamIds(reply)
     local set = {}
     if type(reply) == "string" then
@@ -439,7 +387,7 @@ local function parseSteamIds(reply)
     return set
 end
 
--- Guarded so we never stack duplicates if a poll fires while requests are still pending.
+-- Queues the verified/admin list HTTP paths for polling, skipping paths already queued.
 local function queueHttpLists()
     if not CONFIG.HTTP_ENABLED then return end
     local want = { CONFIG.HTTP_PATH_VERIFIED, CONFIG.HTTP_PATH_ADMINS }
@@ -461,19 +409,18 @@ local function urlEncode(s)
     end))
 end
 
--- No dedup, unlike queueHttpLists -- each warn has distinct steam_id/reason and should always fire.
 local function queueHttpRequest(path)
     if not CONFIG.HTTP_ENABLED then return end
     httpQueue[#httpQueue + 1] = path
 end
 
+-- Looks up a group owner's current display name, or "offline" if they're not connected.
 local function ownerName(g)
     local op = steamToPeer[g.owner_steam]
     return (op and players[op] and players[op].name) or "offline"
 end
 
--- Exact matches are checked in a full pass before substring matches, so "?tp Sam" can't
--- resolve to "Samantha" instead depending on table iteration order.
+-- Resolves a command target: numeric peer_id, exact name match, then partial name match.
 local function resolveTarget(arg)
     if arg == nil then return nil end
     local asNum = tonumber(arg)
@@ -494,6 +441,7 @@ end
 
 local LEET = { ["0"] = "o", ["1"] = "i", ["3"] = "e", ["4"] = "a", ["5"] = "s", ["7"] = "t", ["@"] = "a", ["$"] = "s" }
 
+-- Lowercases a word, maps common leetspeak substitutions, and strips non-letters for slur matching.
 local function normalizeWord(w)
     w = w:lower()
     w = w:gsub(".", function(ch) return LEET[ch] or ch end)
@@ -501,8 +449,7 @@ local function normalizeWord(w)
     return w
 end
 
--- A run of consecutive short tokens (<=2 letters) glues together too, to catch
--- "n i g g e r" spacing evasion without false-positiving on normal short words.
+-- Scans a message word-by-word (and short-word run concatenation) for normalized slur matches.
 local function containsSlur(message)
     local run = ""
     for word in message:gmatch("%S+") do
@@ -539,6 +486,7 @@ local function groupsOwnedBy(steam_id)
     return list
 end
 
+-- Fetches a vehicle group's tracking record, creating and initializing a fresh one if it doesn't exist yet.
 local function getOrCreateGroup(group_id, steam_id)
     local g = groups[group_id]
     if not g then
@@ -556,10 +504,9 @@ local function getOrCreateGroup(group_id, steam_id)
     return g
 end
 
--- Forward-declared: defined in MAP MARKERS below, but destroyGroup needs it above that.
 local updateGroupMarker, removeGroupMarker, updatePlayerMarker, removePlayerMarker
 
--- `silent` skips the generic despawn broadcast, for callers that send their own toast.
+-- Destroys a group's vehicles and clears all tracking state for it.
 local function destroyGroup(group_id, silent)
     local g = groups[group_id]
     if not g then return false end
@@ -580,7 +527,7 @@ local function destroyGroup(group_id, silent)
     return true
 end
 
--- Instant removal for a hard-limit violation -- no warning, no countdown.
+-- Instantly destroys a group for a hard antilag violation and broadcasts why.
 local function smiteHardLimit(group_id, reason)
     local g = groups[group_id]
     if not g then return end
@@ -597,8 +544,7 @@ local function destroyAllGroupsOf(steam_id)
     return #ids
 end
 
--- cancelIfHealthy marks a TPS-cull entry that gets spared if TPS recovers before the deadline;
--- hard-limit triggers never pass this.
+-- Records a pending countdown-delayed destroy for a group with the reasons to show owner and everyone else.
 local function scheduleGroupDestroy(group_id, ownerPeer, ownerReason, publicReason, cancelIfHealthy)
     pendingDestroy[group_id] = {
         deadline_ms = server.getTimeMillisec() + CONFIG.ANTILAG_COUNTDOWN_SEC * 1000,
@@ -612,8 +558,7 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- WARN / KICK / BAN
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- De-auths the target (needs ?auth, not ?noworkshop, to get back in); escalates every
--- WARNS_BEFORE_KICK-th warning to a kick, every KICKS_BEFORE_BAN-th kick to a ban.
+-- Issues a warning, revokes auth and despawns the target's vehicles, escalating to kick then ban on repeat offenses.
 local function warnPlayer(target_peer, reason, byName)
     local tp = players[target_peer]
     if not tp then return false end
@@ -659,6 +604,7 @@ local function warnPlayer(target_peer, reason, byName)
     return true
 end
 
+-- Despawns a player's oldest groups until they're at or under their vehicle limit.
 local function enforceLimit(steam_id)
     local peer_id = steamToPeer[steam_id]
     local p = peer_id and players[peer_id]
@@ -685,8 +631,7 @@ local function normalizeName(s)
     return (s or ""):upper():gsub("^%s+", ""):gsub("%s+$", "")
 end
 
--- server.getVehicleName was removed from the API, so a vehicle's real saved title can't be
--- read -- this only catches a maker tag someone typed into a component's name field.
+-- Computes a vehicle's lag-cost inputs (voxels, mass, component count) and extracts its "made by" tag if present.
 local function analyzeVehicle(vehicle_id)
     local d, ok = server.getVehicleComponents(vehicle_id)
     if not ok or not d then return 0, 0, nil end
@@ -700,7 +645,6 @@ local function analyzeVehicle(vehicle_id)
             for _, comp in pairs(category) do
                 componentCount = componentCount + 1
                 if not maker and comp.name then
-                    -- Stops at the first punctuation, so "MADE BY TAJIN - v2" captures just "TAJIN".
                     local m = comp.name:upper():match("MADE BY%s+([%w][%w%s]*)")
                     if m then maker = normalizeName(m) end
                 end
@@ -719,12 +663,11 @@ local function normalTpsThreshold()
     return antilagNormalTps or CONFIG.ANTILAG_NORMAL_TPS
 end
 
--- Reads g.bodyCount (O(1)) rather than counting g.vehicles each call.
+-- Scales a group's raw lag cost by subbody count, current player count, and a decaying age bonus.
 local function effectiveCost(group_id)
     local g = groups[group_id]
     if not g then return 0 end
     local raw = (g.cost or 0) + (g.bodyCount or 0) * CONFIG.LAG_W_SUBBODY
-    -- Fresh spawns cost more, decaying to 0 over LAG_AGE_DECAY ticks.
     local age = tickCount - (g.spawn_tick or tickCount)
     local ageBonus = math.max(0, 1 - age / CONFIG.LAG_AGE_DECAY) * CONFIG.LAG_AGE_WEIGHT
     return raw * (1 + lastPlayerCount * CONFIG.LAG_PLAYER_FACTOR) * (1 + ageBonus)
@@ -734,6 +677,7 @@ end
 -- VEHICLE SETTINGS (antisteal / pvp / tooltip)
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+-- Applies the owner's antisteal/pvp preferences and a status tooltip to a spawned vehicle.
 local function applyVehicleSettings(vehicle_id)
     local group_id = vehicleToGroup[vehicle_id]
     if not group_id then return end
@@ -770,8 +714,6 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- MAP MARKERS (?hide) -- green for vehicle groups, orange for players
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Markers are PARENTED to a vehicle_id/character object_id rather than a raw x/z, so the
--- engine follows the vehicle/player on its own.
 local MAP_POS_VEHICLE    = 1
 local MAP_POS_OBJECT     = 2
 local MAP_ICON_VEHICLE   = 12
@@ -784,8 +726,7 @@ local function clearMapObject(id, alsoPeer)
     if alsoPeer then safeServer("removeMapObject", alsoPeer, id) end
 end
 
--- Idempotent: g.mapVid/g.mapTarget track what's already placed so a 20-body creation
--- doesn't re-place its marker 20 times in one spawn burst.
+-- Places or refreshes a group's map marker on its first vehicle, targeted to the owner only if they're hidden.
 function updateGroupMarker(group_id)
     local g = groups[group_id]
     local id = MAP_ID_GROUP_BASE + group_id
@@ -823,7 +764,7 @@ function removeGroupMarker(group_id)
     clearMapObject(MAP_ID_GROUP_BASE + group_id, nil)
 end
 
--- Called every UI refresh but only touches the map API when something actually changed.
+-- Places or refreshes a player's map marker, skipping the update if nothing relevant changed.
 function updatePlayerMarker(peer_id)
     local p = getP(peer_id)
     if not p then return end
@@ -839,7 +780,6 @@ function updatePlayerMarker(peer_id)
     end
 
     local rank = rankOf(p)
-    -- Also re-places when RANK changes (auth granted, promoted to admin, etc).
     if p.mapCharId == charId and p.mapHidden == p.hidden and p.mapRank == rank then return end
 
     clearMapObject(id, peer_id)
@@ -877,7 +817,6 @@ local OUTFIT_IDS = {
     [149] = true,
 }
 
--- Used only to pick a ?tool price tier (CONFIG.TOOL_PRICE_WEAPON).
 local WEAPON_IDS = {
     [13] = true,
     [14] = true,
@@ -900,7 +839,6 @@ local function toolPrice(eqId)
     return CONFIG.TOOL_PRICE_ITEM
 end
 local EQUIPMENT_NAMES   = {
-    -- Outfits
     [1] = "diving",
     [2] = "firefighter",
     [3] = "scuba",
@@ -915,7 +853,6 @@ local EQUIPMENT_NAMES   = {
     [79] = "space_suit",
     [80] = "space_suit_exploration",
     [149] = "firefighter_scba",
-    -- Items
     [6] = "binoculars",
     [7] = "cable",
     [8] = "compass",
@@ -954,11 +891,8 @@ local EQUIPMENT_NAMES   = {
     [72] = "glowstick",
     [73] = "dog_whistle",
     [81] = "fishing_rod",
-    -- Ammo boxes, shells, and fish/crustaceans deliberately excluded.
 }
 
--- Keyed by the name with underscores turned into spaces, so both "?tool fire_extinguisher"
--- and "?tool fire extinguisher" work.
 local EQUIPMENT_BY_NAME = {}
 for id, nm in pairs(EQUIPMENT_NAMES) do
     EQUIPMENT_BY_NAME[(nm:gsub("_", " "))] = id
@@ -967,7 +901,6 @@ EQUIPMENT_BY_NAME["coal"] = 28
 EQUIPMENT_BY_NAME["ore"] = 28
 EQUIPMENT_BY_NAME["ingot"] = 28
 
--- Built once at load; announced in chunks since a single server.announce with ~150 lines truncates.
 local EQUIPMENT_LIST_LINES = {}
 do
     local ids = {}
@@ -978,6 +911,7 @@ do
     end
 end
 
+-- Sends the full equipment ID/name list to a player in chat, paginated to avoid oversized messages.
 local function sendToolList(peer_id)
     local perMsg, buf = 30, {}
     server.announce("[Tools]", "?tool | Usage: ?tool <id|name>. Available equipment:", peer_id)
@@ -994,6 +928,7 @@ end
 -- REPAIR / FLIP / VTP
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+-- Resets physics state on every vehicle in a group and flags them for a settings reapply.
 local function repairGroup(group_id)
     local g = groups[group_id]
     if not g then return 0 end
@@ -1006,6 +941,7 @@ local function repairGroup(group_id)
     return n
 end
 
+-- Rights every vehicle in a group upright at a raised offset, preserving yaw.
 local function flipGroup(group_id)
     local g = groups[group_id]
     if not g then return 0 end
@@ -1027,8 +963,8 @@ local function flipGroup(group_id)
     return n
 end
 
--- Uses setVehiclePos (exact placement) instead of setGroupPosSafe, whose collision-avoidance
--- nudged groups off the exact target. Verification is deferred -- see onTick's VTP block.
+-- Moves a group to the player, verifying the read-back a few ticks later since
+-- checking in the same tick as the move sees the stale pre-move position.
 local function requestVtpTeleport(group_id, peer_id)
     local g = groups[group_id]
     if not g then
@@ -1086,6 +1022,7 @@ local function requestVtpTeleport(group_id, peer_id)
     dbgLog(4, "VTP", "group " .. group_id .. " teleport issued for peer " .. peer_id .. " (" .. moved .. " bodies)")
 end
 
+-- Resolves a command argument to a list of the caller's owned group(s), or an error message if invalid/not owned.
 local function resolveOwnedGroups(peer_id, arg)
     local p = getP(peer_id)
     if not p then return nil, "Player state missing." end
@@ -1106,6 +1043,7 @@ end
 -- HEAL / REVIVE MODULE
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+-- Auto-revives and fully heals a player's character while their PvP setting is off.
 local function reviveIfPvpOff(peer_id)
     local p = getP(peer_id)
     if not p or p.pvp then return end
@@ -1131,6 +1069,7 @@ local function queueBlast(x, y, z, mag)
     nukeQueue[#nukeQueue + 1] = { m = matrix.translation(x, y, z), mag = mag }
 end
 
+-- Queues an n x n x n cube of blasts centered on a point, spaced evenly on each axis.
 local function queueGrid(cx, cy, cz, n, spacing, mag)
     local half = (n - 1) / 2
     for ix = -half, half do
@@ -1142,6 +1081,7 @@ local function queueGrid(cx, cy, cz, n, spacing, mag)
     end
 end
 
+-- Queues blasts for a nuke tier: a single blast, or a grid of blasts for the hyper/mega tiers.
 local function queueNuke(tier, targetMatrix)
     local x, y, z = matrix.position(targetMatrix)
     local mag = CONFIG.NUKE_MAGNITUDE
@@ -1154,6 +1094,7 @@ local function queueNuke(tier, targetMatrix)
     end
 end
 
+-- Resolves a nuke target ("p" = player, "v" = vehicle group) argument to a world matrix.
 local function resolveNukeTarget(kind, idArg)
     kind = (kind or ""):lower()
     if kind == "p" then
@@ -1174,6 +1115,7 @@ local function resolveNukeTarget(kind, idArg)
     return nil, "First argument must be 'v' (vehicle) or 'p' (player)."
 end
 
+-- Lazily caches teleport zone positions from the map on first call.
 local function loadTeleports()
     if teleportCache then return end
     teleportCache = {}
@@ -1185,6 +1127,7 @@ local function loadTeleports()
     end
 end
 
+-- Lazily caches cargo zone positions from the map on first call.
 local function loadCargoZones()
     if cargoZoneCache then return end
     cargoZoneCache = {}
@@ -1199,10 +1142,9 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- ECONOMY: CARGO & FUEL STATION
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- ?cargo/?deliver and ?refuel are built on the same 16 zones ?tp already uses.
 local FUEL_TYPE_DIESEL, FUEL_TYPE_JETFUEL = 1, 2
 
--- Returns the numeric zone id (1-16), matching TELEPORT_NAMES' indices.
+-- Finds the closest teleport zone to a position, within radius, from the DLC or base zone list.
 local function findNearestZone(pos, radius)
     loadTeleports()
     local names = CONFIG.TELEPORT_ARID_DLC and TELEPORT_NAMES_DLC or TELEPORT_NAMES
@@ -1218,7 +1160,7 @@ local function findNearestZone(pos, radius)
     return nil
 end
 
--- ANY group counts, not just the ?deliver caller's, so players can combine loads.
+-- Sums the mass of every vehicle group whose representative body is within radius of a zone.
 local function totalMassNearZone(zonePos, radius)
     local total = 0
     for _, g in pairs(groups) do
@@ -1243,8 +1185,7 @@ end
 -- UI
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
--- Dedup key includes position, not just text -- otherwise a panel move with unchanged text
--- would silently be skipped.
+-- Updates a player's popup screen, skipping the server call if the content is unchanged from the cache.
 local function sendPopup(peer_id, ui_id, name, show, text, x, y)
     popupCache[peer_id] = popupCache[peer_id] or {}
     local key = show and (text .. "\0" .. tostring(x) .. "," .. tostring(y)) or "__HIDDEN__"
@@ -1257,6 +1198,7 @@ local UI_SEP_1 = "________________"
 local UI_SEP_2 = "________________"
 local UI_SEP_3 = "________________"
 
+-- Builds the main HUD panel text for a player (uptime, playtime, owned vehicles, settings).
 local function buildMain(peer_id, playerCount)
     local p = getP(peer_id)
     if not p then return "" end
@@ -1290,6 +1232,7 @@ local function buildMain(peer_id, playerCount)
         "Hidden: " .. onOff(p.hidden)
 end
 
+-- Builds the center-screen auth-gate text shown to unauthed players, pointing at ?auth or ?noworkshop.
 local function buildCenter(peer_id)
     local p = getP(peer_id)
     if not p or p.authed then return "" end
@@ -1300,6 +1243,7 @@ local function buildCenter(peer_id)
         "Read ?rules first."
 end
 
+-- Pushes both the auth-gate popup and the main stats popup to a player, only if not authed/UI-enabled respectively.
 local function refreshUI(peer_id, playerCount)
     local p = getP(peer_id)
     if not p then return end
@@ -1310,7 +1254,6 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- HELP
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Read by ?help, ?help <command>, and a command's own bad-argument reply.
 local COMMAND_HELP = {
     ["?help"] = {
         tier = "everyone",
@@ -1547,9 +1490,6 @@ COMMAND_HELP["?repair"] = COMMAND_HELP["?r"]
 COMMAND_HELP["?flip"] = COMMAND_HELP["?f"]
 COMMAND_HELP["?antisteal"] = COMMAND_HELP["?as"]
 
--- Explicit display order per tier (COMMAND_HELP itself has no order -- it's a hash
--- table). Aliases are deliberately left out of these lists so the compact ?help
--- view doesn't show both "?c" and "?cleanup" as if they were different commands.
 local HELP_ORDER_EVERYONE = { "?help", "?man", "?noworkshop", "?auth", "?ui", "?die", "?admins", "?rules", "?tp" }
 local HELP_ORDER_AUTHED = {
     "?c", "?r", "?f", "?vtp", "?as", "?pvp", "?hide", "?tool",
@@ -1561,7 +1501,6 @@ local HELP_ORDER_ADMIN = {
     "?nuke", "?hypernuke", "?meganuke", "?flares", "?announce", "?dbg", "?perf", "?antilag",
 }
 
--- Deliberately does NOT repeat usage/tier -- showManPage() pulls those from COMMAND_HELP.
 local MAN_HELP = {
     ["?help"] = {
         description = "Prints either the full command list (grouped by tier, filtered to what you can " ..
@@ -1949,7 +1888,7 @@ MAN_HELP["?repair"] = MAN_HELP["?r"]
 MAN_HELP["?flip"] = MAN_HELP["?f"]
 MAN_HELP["?antisteal"] = MAN_HELP["?as"]
 
--- Gates ?help/?man so a command reads as "unknown" to anyone who couldn't run it.
+-- Checks whether a player's rank meets a command's required tier (everyone/authed/moderator/admin).
 local function canSeeCommand(p, tier)
     if tier == "everyone" then return true end
     if tier == "authed" then return p ~= nil and (p.authed or p.is_admin) end
@@ -1958,8 +1897,7 @@ local function canSeeCommand(p, tier)
     return false
 end
 
--- A command the caller can't run reads as nonexistent, so nobody learns a higher-tier
--- command exists by probing ?help.
+-- Prints one command's usage + short detail, respecting tier visibility and the missing-"?" convenience.
 local function showCommandHelp(peer_id, cmd)
     cmd = tostring(cmd):lower()
     if cmd:sub(1, 1) ~= "?" then cmd = "?" .. cmd end
@@ -1971,6 +1909,7 @@ local function showCommandHelp(peer_id, cmd)
     server.announce("[Help]", cmd .. " | Usage: " .. info.usage .. ", " .. info.detail, peer_id)
 end
 
+-- Renders the full manpage-style entry (description, when-to-use, variants, examples) for a command.
 local function showManPage(peer_id, cmd)
     cmd = tostring(cmd):lower()
     if cmd:sub(1, 1) ~= "?" then cmd = "?" .. cmd end
@@ -2002,6 +1941,7 @@ local function showManPage(peer_id, cmd)
     server.announce("[Man]", table.concat(lines, "\n"), peer_id)
 end
 
+-- Prints the full command list, grouped by tier and filtered to what the caller can actually run.
 local function sendHelp(peer_id)
     local p         = getP(peer_id)
     local authed    = p and p.authed
@@ -2095,7 +2035,6 @@ local KNOWN_CMDS = {
     ["?dbg"] = true,
     ["?perf"] = true,
     ["?antilag"] = true,
-    -- ?warn/?kill/?msg: admin OR moderator, own inline permission check, not gated by ADMIN_CMDS.
     ["?warn"] = true,
     ["?kill"] = true,
     ["?admins"] = true,
@@ -2116,8 +2055,7 @@ local KNOWN_CMDS = {
 -- CALLBACKS
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
--- `authed` is passed in rather than hardcoded: a real join starts UNauthed, but the reload
--- rebuild restores whatever auth the engine already had so a reload doesn't de-auth everyone.
+-- Builds a fresh in-memory player state record with all default toggles and saved PvP preference applied.
 local function makePlayerRecord(steam_id, name, is_admin, authed)
     local savedPvp = g_savedata.pvp[steam_id]
     if savedPvp == nil then savedPvp = CONFIG.DEFAULT_PVP end
@@ -2126,8 +2064,6 @@ local function makePlayerRecord(steam_id, name, is_admin, authed)
         name        = name,
         is_admin    = (is_admin == true),
         authed      = (authed == true),
-        -- revoked: true once this player has EVER been de-authed. Distinguishes "never
-        -- authed yet" (?noworkshop) from "was authed, lost it" (?auth).
         revoked     = false,
         ui          = CONFIG.DEFAULT_UI_ON,
         pvp         = savedPvp,
@@ -2138,21 +2074,17 @@ local function makePlayerRecord(steam_id, name, is_admin, authed)
         last_pos    = nil,
         dbgLevel    = 0,
         hidden      = false,
-        -- cargoJob: { origin_zone_id, dest_zone_id, dest_name, mass_required, payout }, session-only.
         cargoJob    = nil,
         lastCargoMs = 0,
-        -- payRequest: { from_peer_id, from_name, amount, ts_ms }.
         payRequest  = nil,
     }
 end
 
--- Fires on world load AND on "?reload_scripts" -- the rebuild loop re-seeds
--- players/steamToPeer since onPlayerJoin doesn't re-fire for already-connected players.
+-- Mission-start callback: resets all timers/counters, cleans stray vehicles, and rebuilds state for already-connected players.
 function onCreate(is_world_create)
     startMs = server.getTimeMillisec()
     tpsLastMs = startMs
 
-    -- math.random is deterministic until seeded.
     if type(math.randomseed) == "function" then
         math.randomseed(startMs)
     end
@@ -2170,8 +2102,6 @@ function onCreate(is_world_create)
         server.cleanVehicles()
     end
 
-    -- Re-seed player state for everyone already connected (the reload case); a no-op on a
-    -- genuine fresh world create.
     local list = server.getPlayers()
     if list then
         for _, pl in pairs(list) do
@@ -2181,8 +2111,6 @@ function onCreate(is_world_create)
             g_savedata.playtime[sid] = g_savedata.playtime[sid] or 0
             getBalance(sid)
             popupCache[pl.id] = {}
-            -- A reload wipes in-memory state but not what's already client-rendered.
-            -- 9004/9002 are the removed Nearby/admin panels' old ids.
             server.removePopup(pl.id, UI_MAIN)
             server.removePopup(pl.id, UI_CENTER)
             server.removePopup(pl.id, 9004)
@@ -2199,6 +2127,7 @@ function onCreate(is_world_create)
         CONFIG.SCRIPT_NAME .. " v" .. CONFIG.SCRIPT_VERSION .. " initialized and loaded.", -1)
 end
 
+-- Player-join callback: creates player state, applies access, and shows the appropriate welcome/auth-gate message.
 function onPlayerJoin(steam_id, name, peer_id, is_admin, is_auth)
     steam_id = tostring(steam_id)
     players[peer_id] = makePlayerRecord(steam_id, name, is_admin, false)
@@ -2207,8 +2136,6 @@ function onPlayerJoin(steam_id, name, peer_id, is_admin, is_auth)
     getBalance(steam_id)
     popupCache[peer_id] = {}
 
-    -- Always de-auth on join first, THEN grant back only if the HTTP lists say so, so
-    -- nobody keeps a stale engine-side auth from a previous session.
     server.removeAuth(peer_id)
     applyAccess(peer_id)
 
@@ -2226,6 +2153,7 @@ function onPlayerJoin(steam_id, name, peer_id, is_admin, is_auth)
     dbgLog(3, "JOIN", name .. " (" .. steam_id .. ") joined as peer " .. peer_id .. " rank " .. rankOf(players[peer_id]))
 end
 
+-- Player-leave callback: despawns their vehicles if configured, releases anyone they had frozen, and clears their state.
 function onPlayerLeave(steam_id, name, peer_id, is_admin, is_auth)
     steam_id = tostring(steam_id)
     dbgLog(3, "LEAVE", name .. " (" .. steam_id .. ") left, peer " .. peer_id)
@@ -2253,7 +2181,7 @@ function onPlayerDie(steam_id, name, peer_id, is_admin, is_auth)
     reviveIfPvpOff(peer_id)
 end
 
--- looseEquipment tracks anything this fails to despawn, so ?flares can retry it later.
+-- Auto-despawns equipment the moment a player drops it, if that behavior is enabled.
 function onEquipmentDrop(character_object_id, equipment_object_id, equipment_id)
     if not CONFIG.AUTO_DESPAWN_DROPPED_EQUIPMENT then return end
     looseEquipment[equipment_object_id] = true
@@ -2264,7 +2192,7 @@ function onEquipmentDrop(character_object_id, equipment_object_id, equipment_id)
     end
 end
 
--- Ignores replies that parsed to zero ids so a connection failure never revokes everyone's access.
+-- Handles the async HTTP response for the verified/admin list polls, ignoring empty replies to avoid clobbering the cache.
 function httpReply(port, request, reply)
     if port ~= CONFIG.HTTP_PORT then return end
     local ids = parseSteamIds(reply)
@@ -2284,6 +2212,7 @@ function httpReply(port, request, reply)
     applyAccessToAll()
 end
 
+-- Main tick loop: updates TPS, HTTP polling, pending destroy/vtp-verify/apply/nuke queues, freeze/heal, antilag, and UI refresh.
 function onTick(game_ticks)
     tickCount = tickCount + game_ticks
 
@@ -2292,7 +2221,6 @@ function onTick(game_ticks)
         local now = server.getTimeMillisec()
         local elapsed = (now - tpsLastMs) / 1000
         if elapsed > 0 then
-            -- tpsAvg is smoothed, display only, never used for antilag decisions.
             tpsNow = tpsTimer / elapsed
             tpsAvg = (tpsAvg * 0.9) +
                 (tpsNow * 0.1)
@@ -2301,7 +2229,6 @@ function onTick(game_ticks)
         tpsLastMs = now
     end
 
-    -- Drains at most ONE queued request per tick (SW hard-limits httpGet to 1/tick).
     if CONFIG.HTTP_ENABLED then
         httpPollTimer = httpPollTimer + game_ticks
         if httpPollTimer >= CONFIG.HTTP_POLL_SEC * 60 then
@@ -2315,7 +2242,6 @@ function onTick(game_ticks)
         end
     end
 
-    -- Wall-clock based -- once the server is under load, ticks aren't a reliable stand-in for seconds.
     if next(pendingDestroy) then
         local nowMs = server.getTimeMillisec()
         for group_id, pd in pairs(pendingDestroy) do
@@ -2329,7 +2255,6 @@ function onTick(game_ticks)
                 if nowMs >= pd.deadline_ms then
                     local nm = ownerName(groups[group_id])
                     pendingDestroy[group_id] = nil
-                    -- Silent: broadcastNotify below is this removal's toast.
                     destroyGroup(group_id, true)
                     broadcastNotify("Antilag",
                         nm .. "'s creation (group " .. group_id .. ") was removed.", "ORANGE")
@@ -2340,8 +2265,6 @@ function onTick(game_ticks)
         end
     end
 
-    -- GLOBAL ANTILAG UI: normal-tier panel, shown to every player only while a TPS-cull
-    -- countdown is running. Critical fully suppresses normal so the two can never both show.
     do
         local activeText = nil
         if tpsNow >= CONFIG.ANTILAG_CRITICAL_TPS then
@@ -2368,7 +2291,6 @@ function onTick(game_ticks)
         end
     end
 
-    -- Read-back delayed until VTP_VERIFY_DELAY_MS after the teleport, see requestVtpTeleport().
     if next(pendingVtpVerify) then
         local nowMs = server.getTimeMillisec()
         for group_id, v in pairs(pendingVtpVerify) do
@@ -2416,7 +2338,6 @@ function onTick(game_ticks)
         dbgLog(5, "NUKE", "blast fired, magnitude " .. tostring(b.mag) .. " (" .. #nukeQueue .. " left queued)")
     end
 
-    -- Throttled to CONFIG.FREEZE_UPDATE_TICKS, doesn't need 60Hz precision.
     freezeTimer = freezeTimer + game_ticks
     if freezeTimer >= CONFIG.FREEZE_UPDATE_TICKS then
         freezeTimer = 0
@@ -2442,14 +2363,10 @@ function onTick(game_ticks)
         for peer_id in pairs(players) do reviveIfPvpOff(peer_id) end
     end
 
-    -- ANTILAG: fixed-rate TPS-triggered cull -------------------------------------
-    -- Driven by current tps, not the smoothed display average, which lags a real spike.
-    -- Two tiers, mutually exclusive -- critical fully suppresses normal.
     if CONFIG.ANTILAG_ENABLED then
         local normalTps = normalTpsThreshold()
         local inCritical = tpsNow < CONFIG.ANTILAG_CRITICAL_TPS
 
-        -- NORMAL TIER ------------------------------------------------------------
         if tpsNow < normalTps and not inCritical then
             local alreadyCounting = false
             for _, pd in pairs(pendingDestroy) do
@@ -2483,7 +2400,6 @@ function onTick(game_ticks)
             end
         end
 
-        -- CRITICAL TIER ------------------------------------------------------------
         if inCritical then
             local nowMs = server.getTimeMillisec()
             if criticalWasHealthy then
@@ -2513,7 +2429,6 @@ function onTick(game_ticks)
             criticalWasHealthy = true
         end
 
-        -- GLOBAL ANTILAG UI: critical-tier panel, shown while the sustain window is counting.
         local criticalActive = (not criticalWasHealthy) and inCritical
         local criticalText = nil
         if criticalActive then
@@ -2567,7 +2482,6 @@ function onTick(game_ticks)
         end
     end
 
-    -- Full state dump ~once/sec; skips the table scans entirely unless someone has level 5 active.
     dbgHeartbeatTimer = dbgHeartbeatTimer + game_ticks
     if dbgHeartbeatTimer >= 60 then
         dbgHeartbeatTimer = 0
@@ -2597,6 +2511,7 @@ function onTick(game_ticks)
     end
 end
 
+-- Registers a newly spawned group under its owner and enforces the owner's vehicle count limit.
 function onGroupSpawn(group_id, peer_id, x, y, z, group_cost)
     if peer_id == nil or peer_id == -1 then return end
     local p = getP(peer_id)
@@ -2608,13 +2523,12 @@ function onGroupSpawn(group_id, peer_id, x, y, z, group_cost)
     enforceLimit(p.steam_id)
 end
 
+-- Tracks a spawned vehicle body under its group, rejecting it if the group is already blocked or over the subbody limit.
 function onVehicleSpawn(vehicle_id, peer_id, x, y, z, group_cost, group_id)
     if peer_id == nil or peer_id == -1 then return end
     local p = getP(peer_id)
     if not p then return end
 
-    -- A straggler body arriving after its group was already destroyed would otherwise
-    -- rebuild a fresh group and survive -- blockedGroups keeps every later body blocked too.
     if blockedGroups[group_id] then
         dbgLog(1, "CONFLICT", "vehicle " .. vehicle_id .. " tried to join already-blocked group " .. group_id)
         server.despawnVehicleGroup(group_id, true)
@@ -2637,6 +2551,7 @@ function onVehicleSpawn(vehicle_id, peer_id, x, y, z, group_cost, group_id)
     end
 end
 
+-- Untracks a despawned vehicle body, deducting its cost/voxels from the group and cleaning up the group if it's now empty.
 function onVehicleDespawn(vehicle_id, peer_id)
     local group_id = vehicleToGroup[vehicle_id]
     if not group_id then return end
@@ -2661,11 +2576,11 @@ function onVehicleDespawn(vehicle_id, peer_id)
     vehicleVoxels[vehicle_id] = nil
 end
 
+-- Fully loaded callback: enforces "MADE BY" ownership tagging, updates lag-cost tracking, and applies hard antilag limits during the spawn grace window.
 function onVehicleLoad(vehicle_id)
     local gid = vehicleToGroup[vehicle_id]
     if not gid then return end
 
-    -- Same sticky-block check as onVehicleSpawn.
     if blockedGroups[gid] then
         dbgLog(1, "CONFLICT", "vehicle " .. vehicle_id .. " loaded into already-blocked group " .. gid)
         server.despawnVehicleGroup(gid, true)
@@ -2696,8 +2611,6 @@ function onVehicleLoad(vehicle_id)
 
     updateGroupMarker(gid)
 
-    -- Replaces this vehicle's cost/voxel contribution rather than adding, so a reload
-    -- doesn't double-count a vehicle that was already loaded before.
     g.cost = (g.cost or 0) - (vehicleCost[vehicle_id] or 0) + c
     vehicleCost[vehicle_id] = c
     g.voxels = (g.voxels or 0) - (vehicleVoxels[vehicle_id] or 0) + v
@@ -2714,8 +2627,6 @@ function onVehicleLoad(vehicle_id)
             "\nVehicle ID: " .. gid, "GREEN")
     end
 
-    -- Hard limits only apply within the initial spawn window -- onVehicleLoad also fires
-    -- for ?r/?f/?vtp on an already-settled group, which must not get smited.
     local spawnAgeSec = (server.getTimeMillisec() - (g.spawn_ms or 0)) / 1000
     if CONFIG.ANTILAG_ENABLED and spawnAgeSec <= CONFIG.LAG_SPAWN_GRACE_SEC then
         if g.voxels > CONFIG.MAX_BLOCKS_PER_GROUP then
@@ -2737,7 +2648,7 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- CHAT (profanity ban only -- no rank prefix)
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- onChatMessage can't cancel/edit a message, so a rank prefix isn't possible here.
+-- Auto-bans a player and despawns their vehicles the moment their chat message contains a slur.
 function onChatMessage(peer_id, sender_name, message)
     if CONFIG.PROFANITY_BAN and containsSlur(message) then
         server.announce("[MODERATION]", sender_name .. " was auto-banned for prohibited language.", -1)
@@ -2752,10 +2663,7 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- ROOT ACCESS SYSTEM
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- A third tier above admin, hardcoded OWNERS only. Guardrail-free by design. All state is
--- in-memory only; a reload is the only undo, nothing persists to g_savedata.
 local rootSessions        = {}
--- pendingVerification: [steam_id] = { code = "NNNNNN", expires_ms }.
 local pendingVerification = {}
 local usedRootCodes       = {}
 local ROOT_CODE_TTL_MS    = 30000
@@ -2764,8 +2672,7 @@ local function rootSay(peer_id, msg)
     server.announce("[ROOT]", msg, peer_id)
 end
 
--- Recovers argument tokens past the engine's 3-argument ceiling (settank, explode need more)
--- by re-parsing full_message. Never used for the subcommand or verify code, only arg1/arg2.
+-- Splits any tokens after the third root command argument out of the raw chat message, for variadic root commands.
 local function rootExtraArgs(full_message, arg3)
     local extra = {}
     if type(full_message) == "string" and arg3 ~= nil then
@@ -2781,7 +2688,7 @@ local function rootExtraArgs(full_message, arg3)
     return extra
 end
 
--- Fresh 6-digit code, guaranteed unused this run.
+-- Generates a random 6-digit one-time root verification code, guaranteed unique against previously issued codes.
 local function generateRootCode()
     local code
     repeat
@@ -2791,6 +2698,7 @@ local function generateRootCode()
     return code
 end
 
+-- Issues a time-limited root verification code and warns the caller root has no safety checks.
 local function handleRootEnable(peer_id, steam_id)
     local code = generateRootCode()
     pendingVerification[steam_id] = { code = code, expires_ms = server.getTimeMillisec() + ROOT_CODE_TTL_MS }
@@ -2800,6 +2708,7 @@ local function handleRootEnable(peer_id, steam_id)
         "The code lasts 30 seconds and works once.")
 end
 
+-- Validates a submitted root code against the pending one (checking expiry) and opens a root session on success.
 local function handleRootVerify(peer_id, steam_id, submitted)
     local pending = pendingVerification[steam_id]
     if not pending then
@@ -2825,12 +2734,8 @@ local function handleRootDisable(peer_id, steam_id)
     rootSay(peer_id, "You left root.")
 end
 
--- ---- Root command registry ------------------------------------------------------------
--- Every handler is (caller_peer_id, args) and calls server.* directly with raw,
--- unvalidated values on purpose -- no bounds/target/nil guards.
 
--- Fail-loud: reports a clear error to the caller instead of an unguarded nil index
--- silently aborting the command (this sandbox has no pcall).
+-- Resolves a raw root command argument to a tracked player record and peer_id, erroring to the caller if invalid.
 local function rootPlayer(caller, rawId)
     local id = tonumber(rawId)
     local tp = id and players[id]
@@ -2841,6 +2746,7 @@ local function rootPlayer(caller, rawId)
     return tp, id
 end
 
+-- Resolves a raw root command argument to a tracked vehicle group, erroring to the caller if invalid.
 local function rootGroup(caller, rawId)
     local id = tonumber(rawId)
     local g = id and groups[id]
@@ -2852,38 +2758,44 @@ local function rootGroup(caller, rawId)
 end
 
 local rootCommands = {
+    -- Teleports a peer to the caller's current position, no bounds or existence checks.
     ["tphere"] = function(caller, a)
         local m = server.getPlayerPos(caller)
         server.setPlayerPos(tonumber(a[1]), m)
         rootSay(caller, "tphere -> peer " .. tostring(a[1]))
     end,
+    -- Teleports the caller to another peer's current position.
     ["goto"] = function(caller, a)
         local m = server.getPlayerPos(tonumber(a[1]))
         server.setPlayerPos(caller, m)
         rootSay(caller, "goto -> peer " .. tostring(a[1]))
     end,
+    -- Kills a peer's character directly, no confirmation or logging.
     ["kill"] = function(caller, a)
         local charId = server.getPlayerCharacterID(tonumber(a[1]))
         server.killCharacter(charId)
         rootSay(caller, "killed peer " .. tostring(a[1]))
     end,
+    -- Revives and fully heals a peer's character regardless of their PvP setting.
     ["heal"] = function(caller, a)
         local charId = server.getPlayerCharacterID(tonumber(a[1]))
         server.reviveCharacter(charId)
         server.setCharacterData(charId, 100, true, false)
         rootSay(caller, "healed peer " .. tostring(a[1]))
     end,
+    -- Sets a peer's HP to a huge value as a crude god-mode.
     ["god"] = function(caller, a)
         local charId = server.getPlayerCharacterID(tonumber(a[1]))
         server.setCharacterData(charId, 999999, true, false)
         rootSay(caller, "god (hp 999999) -> peer " .. tostring(a[1]))
     end,
+    -- Sets a peer's HP to any raw value, no 0-100 clamp.
     ["sethp"] = function(caller, a)
         local charId = server.getPlayerCharacterID(tonumber(a[1]))
         server.setCharacterData(charId, tonumber(a[2]), true, false)
         rootSay(caller, "sethp " .. tostring(a[2]) .. " -> peer " .. tostring(a[1]))
     end,
-    -- Bypasses every rule ?noworkshop/?auth enforce.
+    -- Force-sets a peer's authed flag and syncs it directly to the server auth API.
     ["forceauth"] = function(caller, a)
         local tp, target = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2892,6 +2804,7 @@ local rootCommands = {
         if on then server.addAuth(target) else server.removeAuth(target) end
         rootSay(caller, "forceauth " .. tostring(on) .. " -> peer " .. tostring(target))
     end,
+    -- Force-sets a peer's admin flag; setting it false does not revoke server-side admin.
     ["forceadmin"] = function(caller, a)
         local tp, target = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2899,13 +2812,14 @@ local rootCommands = {
         safeServer("addAdmin", target)
         rootSay(caller, "forceadmin " .. tostring(tp.is_admin) .. " -> peer " .. tostring(target))
     end,
+    -- Force-sets a peer's revoked flag directly, bypassing the normal warn/kick flow.
     ["forcerevoked"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
         tp.revoked = a[2] == "1"
         rootSay(caller, "forcerevoked " .. tostring(tp.revoked) .. " -> peer " .. tostring(a[1]))
     end,
-    -- Does NOT persist to g_savedata.pvp, unlike ?pvp's own toggle.
+    -- Force-sets a peer's PvP toggle and requeues their vehicles for the setting to take effect.
     ["setpvp"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2913,6 +2827,7 @@ local rootCommands = {
         queueApplyAllOf(tp.steam_id)
         rootSay(caller, "setpvp " .. tostring(tp.pvp) .. " -> peer " .. tostring(a[1]))
     end,
+    -- Force-sets a peer's hidden flag and refreshes their and their vehicles' map markers.
     ["sethidden"] = function(caller, a)
         local tp, target = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2922,13 +2837,14 @@ local rootCommands = {
         for i = 1, #owned do updateGroupMarker(owned[i]) end
         rootSay(caller, "sethidden " .. tostring(tp.hidden) .. " -> peer " .. tostring(target))
     end,
+    -- Force-sets a peer's debug log verbosity level, unclamped.
     ["setdbg"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
         tp.dbgLevel = tonumber(a[2])
         rootSay(caller, "setdbg " .. tostring(tp.dbgLevel) .. " -> peer " .. tostring(a[1]))
     end,
-    -- NO clamp-at-zero (unlike setBalance()) -- can go negative.
+    -- Directly overwrites a peer's wallet balance, bypassing setBalance's clamp to zero.
     ["setbalance"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2936,6 +2852,7 @@ local rootCommands = {
         g_savedata.wallet[tp.steam_id] = tonumber(a[2])
         rootSay(caller, "setbalance " .. tostring(a[2]) .. " -> peer " .. tostring(a[1]))
     end,
+    -- Directly adjusts a peer's wallet balance by a delta, bypassing addBalance's clamp to zero.
     ["addbalance"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2944,6 +2861,7 @@ local rootCommands = {
         rootSay(caller, "addbalance " .. tostring(a[2]) .. " -> peer " .. tostring(a[1]) ..
             " (new: " .. tostring(g_savedata.wallet[tp.steam_id]) .. ")")
     end,
+    -- Prints a peer's full in-memory player state record for debugging.
     ["dumpplayer"] = function(caller, a)
         local tp = rootPlayer(caller, a[1])
         if not tp then return end
@@ -2958,42 +2876,48 @@ local rootCommands = {
             " alt=" .. tostring(tp.alt) .. " lastCargoMs=" .. tostring(tp.lastCargoMs))
     end,
 
+    -- Teleports a vehicle group to the caller's position, no tracking-state sync.
     ["vtphere"] = function(caller, a)
         local m = server.getPlayerPos(caller)
         server.setGroupPosSafe(tonumber(a[1]), m)
         rootSay(caller, "vtphere -> group " .. tostring(a[1]))
     end,
+    -- Teleports a vehicle group to arbitrary raw world coordinates.
     ["vteleport"] = function(caller, a)
         server.setGroupPosSafe(tonumber(a[1]), matrix.translation(tonumber(a[2]), tonumber(a[3]), tonumber(a[4])))
         rootSay(caller, "vteleport group " .. tostring(a[1]) .. " -> " .. tostring(a[2]) .. "," ..
             tostring(a[3]) .. "," .. tostring(a[4]))
     end,
+    -- Despawns a vehicle group directly through the server API, bypassing destroyGroup's tracking cleanup.
     ["vdespawn"] = function(caller, a)
         server.despawnVehicleGroup(tonumber(a[1]), true)
         rootSay(caller, "despawned group " .. tostring(a[1]))
     end,
+    -- Directly sets a single vehicle's invulnerability flag, independent of the owner's PvP setting.
     ["vinv"] = function(caller, a)
         server.setVehicleInvulnerable(tonumber(a[1]), a[2] == "1")
         rootSay(caller, "vehicle " .. tostring(a[1]) .. " invulnerable=" .. tostring(a[2] == "1"))
     end,
+    -- Sets a fluid level directly in one of a vehicle's tanks by name.
     ["settank"] = function(caller, a)
         server.setVehicleTank(tonumber(a[1]), a[2], tonumber(a[3]), tonumber(a[4]))
         rootSay(caller, "settank v" .. tostring(a[1]) .. " " .. tostring(a[2]) .. "=" .. tostring(a[3]) ..
             " fluid " .. tostring(a[4]))
     end,
-    -- The number antilag's ceiling check reads.
+    -- Directly overwrites a tracked group's lag cost value, bypassing analyzeVehicle.
     ["vcost"] = function(caller, a)
         local g = rootGroup(caller, a[1])
         if not g then return end
         g.cost = tonumber(a[2])
         rootSay(caller, "vcost group " .. tostring(a[1]) .. " = " .. tostring(g.cost))
     end,
-    -- Same mark a hard limit sets.
+    -- Directly toggles a group id's blocked flag, without requiring the group to currently exist.
     ["vblock"] = function(caller, a)
         local gid = tonumber(a[1])
         if a[2] == "1" then blockedGroups[gid] = true else blockedGroups[gid] = nil end
         rootSay(caller, "vblock group " .. tostring(gid) .. " = " .. tostring(a[2] == "1"))
     end,
+    -- Reassigns a tracked group's owner_steam without touching vehicle settings, which only reapply on the next queue pass.
     ["chown"] = function(caller, a)
         local g = rootGroup(caller, a[1])
         if not g then return end
@@ -3002,7 +2926,7 @@ local rootCommands = {
         g.owner_steam = tp.steam_id
         rootSay(caller, "chown group " .. tostring(a[1]) .. " -> peer " .. tostring(a[2]) .. " (" .. tp.name .. ")")
     end,
-    -- Does NOT persist -- the next queueApplyAllOf for the real owner overwrites it back.
+    -- Directly sets antisteal/invulnerability on every vehicle in a group, bypassing owner preferences.
     ["chmod"] = function(caller, a)
         local g = rootGroup(caller, a[1])
         if not g then return end
@@ -3014,12 +2938,14 @@ local rootCommands = {
         rootSay(caller, "chmod group " .. tostring(a[1]) .. " antisteal=" .. tostring(antisteal) ..
             " invulnerable=" .. tostring(invuln))
     end,
+    -- Cancels any pending countdown and immediately destroys a group.
     ["forcecull"] = function(caller, a)
         local gid = tonumber(a[1])
         pendingDestroy[gid] = nil
         destroyGroup(gid)
         rootSay(caller, "forcecull group " .. tostring(gid))
     end,
+    -- Prints a tracked group's full state (owner, cost, voxels, blocked/pending flags) for debugging.
     ["dumpgroup"] = function(caller, a)
         local g = rootGroup(caller, a[1])
         if not g then return end
@@ -3035,32 +2961,37 @@ local rootCommands = {
             " pendingDestroy=" .. tostring(pendingDestroy[tonumber(a[1])] ~= nil))
     end,
 
-    -- Reverts on the next real TPS recompute (every CONFIG.TPS_WINDOW_TICKS ticks).
+    -- Overrides the current TPS reading for testing; reverts on the next real TPS sample.
     ["forcetps"] = function(caller, a)
         tpsNow = tonumber(a[1])
         rootSay(caller, "tpsNow forced to " .. tostring(tpsNow) .. " (reverts on the next real TPS sample)")
     end,
-    -- No 10-50 clamp, unlike ?antilag <n>.
+    -- Overrides the normal-tier antilag TPS threshold, unclamped.
     ["antinormaltps"] = function(caller, a)
         antilagNormalTps = tonumber(a[1])
         rootSay(caller, "antilagNormalTps = " .. tostring(antilagNormalTps) .. " (unclamped)")
     end,
+    -- Overrides the critical-tier antilag TPS threshold in CONFIG directly.
     ["anticrittps"] = function(caller, a)
         CONFIG.ANTILAG_CRITICAL_TPS = tonumber(a[1])
         rootSay(caller, "CONFIG.ANTILAG_CRITICAL_TPS = " .. tostring(CONFIG.ANTILAG_CRITICAL_TPS))
     end,
+    -- Overrides the hard lag-cost limit used for spawn-time antilag smites.
     ["maxlagcost"] = function(caller, a)
         CONFIG.LAG_MAX_COST = tonumber(a[1])
         rootSay(caller, "CONFIG.LAG_MAX_COST = " .. tostring(CONFIG.LAG_MAX_COST))
     end,
+    -- Overrides the max seconds a group may take to finish loading before a spawn-time smite.
     ["maxspawntime"] = function(caller, a)
         CONFIG.ANTILAG_MAX_SPAWN_TIME_SEC = tonumber(a[1])
         rootSay(caller, "CONFIG.ANTILAG_MAX_SPAWN_TIME_SEC = " .. tostring(CONFIG.ANTILAG_MAX_SPAWN_TIME_SEC))
     end,
+    -- Overrides how many seconds critical-tier TPS must sustain before a full antilag cull fires.
     ["anticritsustain"] = function(caller, a)
         CONFIG.ANTILAG_CRITICAL_SUSTAIN_SEC = tonumber(a[1])
         rootSay(caller, "CONFIG.ANTILAG_CRITICAL_SUSTAIN_SEC = " .. tostring(CONFIG.ANTILAG_CRITICAL_SUSTAIN_SEC))
     end,
+    -- Clears all pending destroys and blocked groups and hides both global antilag panels for everyone.
     ["resetantilag"] = function(caller, a)
         for gid in pairs(pendingDestroy) do pendingDestroy[gid] = nil end
         for gid in pairs(blockedGroups) do blockedGroups[gid] = nil end
@@ -3074,7 +3005,7 @@ local rootCommands = {
         rootSay(caller, "antilag runtime state fully reset (pendingDestroy, blockedGroups, both global panels)")
     end,
 
-    -- Antilag panels only refresh while shown -- trigger one via forcetps to see the move.
+    -- Repositions one of the named UI panels (main/center/antilagnormal/antilagcritical) at runtime.
     ["uimove"] = function(caller, a)
         local panel, x, y = a[1], tonumber(a[2]), tonumber(a[3])
         if panel == "main" then
@@ -3092,7 +3023,7 @@ local rootCommands = {
         end
         rootSay(caller, "uimove " .. panel .. " -> " .. tostring(x) .. "," .. tostring(y))
     end,
-    -- Bypasses sendPopup's cache; use a scratch id (9999+) since a built-in id gets overwritten.
+    -- Shows an arbitrary raw popup screen to any peer at any UI id, no bounds checks.
     ["uishow"] = function(caller, a)
         local target, ui_id, x, y = tonumber(a[1]), tonumber(a[2]), tonumber(a[3]), tonumber(a[4])
         local text = ""
@@ -3101,10 +3032,12 @@ local rootCommands = {
         rootSay(caller, "uishow ui_id " .. tostring(ui_id) .. " -> peer " .. tostring(target) ..
             " @ " .. tostring(x) .. "," .. tostring(y))
     end,
+    -- Removes an arbitrary popup screen from any peer by UI id.
     ["uihide"] = function(caller, a)
         server.removePopup(tonumber(a[1]), tonumber(a[2]))
         rootSay(caller, "uihide ui_id " .. tostring(a[2]) .. " -> peer " .. tostring(a[1]))
     end,
+    -- Prints the current UI id and position of every fixed panel.
     ["uidump"] = function(caller, a)
         rootSay(caller,
             "main=" .. UI_MAIN .. " @ " .. UI_X_MAIN .. "," .. UI_Y_MAIN .. "\n" ..
@@ -3114,7 +3047,7 @@ local rootCommands = {
             "antilagcritical=" .. UI_ANTILAG_CRITICAL .. " @ " .. UI_X_ANTILAG_CRITICAL .. "," .. UI_Y_ANTILAG_CRITICAL)
     end,
 
-    -- No key-existence check -- a typo'd key silently creates a new field.
+    -- Sets an arbitrary CONFIG key to a value parsed as bool/number/string, no key whitelist or type validation.
     ["cfgset"] = function(caller, a)
         local key, raw = a[1], a[2]
         local val
@@ -3130,31 +3063,37 @@ local rootCommands = {
         CONFIG[key] = val
         rootSay(caller, "CONFIG." .. tostring(key) .. " = " .. tostring(val))
     end,
+    -- Prints the current value of an arbitrary CONFIG key.
     ["cfgget"] = function(caller, a)
         rootSay(caller, "CONFIG." .. tostring(a[1]) .. " = " .. tostring(CONFIG[a[1]]))
     end,
 
+    -- Spawns a single explosion at raw coordinates with a raw magnitude.
     ["explode"] = function(caller, a)
         server.spawnExplosion(matrix.translation(tonumber(a[1]), tonumber(a[2]), tonumber(a[3])), tonumber(a[4]))
         rootSay(caller, "explode @ " .. tostring(a[1]) .. "," .. tostring(a[2]) .. "," .. tostring(a[3]) ..
             " mag " .. tostring(a[4]))
     end,
+    -- Despawns every vehicle server-wide, not just tracked ones.
     ["clean"] = function(caller, a)
         server.cleanVehicles()
         rootSay(caller, "cleanVehicles(), every vehicle server-wide despawned")
     end,
-    -- No MAX_LIMIT clamp, unlike ?setlimit.
+    -- Overrides the global vehicle limit directly, unclamped by CONFIG.MAX_LIMIT.
     ["setlimit"] = function(caller, a)
         globalLimit = tonumber(a[1])
         rootSay(caller, "globalLimit = " .. tostring(globalLimit) .. " (unclamped)")
     end,
+    -- Broadcasts arbitrary raw text to everyone under the [ROOT] tag.
     ["announce"] = function(caller, a)
         server.announce("[ROOT]", table.concat(a, " "), -1)
     end,
+    -- Re-seeds Lua's RNG from the current server time.
     ["reseed"] = function(caller, a)
         math.randomseed(server.getTimeMillisec())
         rootSay(caller, "RNG re-seeded")
     end,
+    -- Prints a global state snapshot: player/group/vehicle counts, antilag queues, TPS, and active root sessions.
     ["dump"] = function(caller, a)
         local playerCount, groupCount, vehicleCount, pendingCount, blockedCount = 0, 0, 0, 0, 0
         for _ in pairs(players) do playerCount = playerCount + 1 end
@@ -3177,27 +3116,28 @@ local rootCommands = {
             end)())
     end,
 
-    -- ACCESS (runtime OWNERS/ADMINS list edits, in-memory only, do NOT persist) ------------
+    -- Grants a steam id permanent owner rank in CONFIG, persisting only for this session (not saved).
     ["addowner"] = function(caller, a)
         CONFIG.OWNERS[tostring(a[1])] = true
         rootSay(caller, "OWNERS += " .. tostring(a[1]))
     end,
+    -- Revokes a steam id's owner rank from CONFIG for this session only.
     ["removeowner"] = function(caller, a)
         CONFIG.OWNERS[tostring(a[1])] = nil
         rootSay(caller, "OWNERS -= " .. tostring(a[1]))
     end,
+    -- Grants a steam id CONFIG-level admin rank for this session only, does not touch server.addAdmin.
     ["addadmin"] = function(caller, a)
         CONFIG.ADMINS[tostring(a[1])] = true
         rootSay(caller, "ADMINS += " .. tostring(a[1]))
     end,
+    -- Revokes a steam id's CONFIG-level admin rank for this session only.
     ["removeadmin"] = function(caller, a)
         CONFIG.ADMINS[tostring(a[1])] = nil
         rootSay(caller, "ADMINS -= " .. tostring(a[1]))
     end,
 }
 
--- Display order (rootCommands is a hash table, has none). Every name here needs a matching
--- ROOT_MAN entry.
 local ROOT_COMMAND_ORDER = {
     "tphere", "goto", "kill", "heal", "god", "sethp", "forceauth", "forceadmin", "forcerevoked",
     "setpvp", "sethidden", "setdbg", "setbalance", "addbalance", "dumpplayer",
@@ -3210,7 +3150,6 @@ local ROOT_COMMAND_ORDER = {
     "addowner", "removeowner", "addadmin", "removeadmin",
 }
 
--- Minimum trailing args each root command needs (0 if none), checked before dispatch.
 local ROOT_MIN_ARGS = {
     tphere = 1,
     ["goto"] = 1,
@@ -3642,7 +3581,7 @@ local ROOT_MAN = {
     },
 }
 
--- Kept separate from COMMAND_HELP/MAN_HELP so ?root never leaks into the normal ?help listing.
+-- Prints either the full root command list or one command's manpage-style entry.
 local function rootHelp(peer_id, sub)
     if not sub then
         local lines = { "Root commands (?root help <command> for full detail):" }
@@ -3682,6 +3621,7 @@ end
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- COMMANDS
 --━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- Dispatches every "?" chat command to its handler, gating each by rank/auth tier before it runs.
 function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1, arg2, arg3)
     command = (command or ""):lower()
     local p = getP(peer_id)
@@ -3692,7 +3632,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
     end
     p.is_admin = (is_admin == true)
 
-    -- Skips ?root entirely -- root leaves nothing in the debug stream, including verify codes.
     if command ~= "?root" then
         local argStr = ""
         if arg1 ~= nil then argStr = argStr .. " " .. tostring(arg1) end
@@ -3701,9 +3640,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         dbgLog(3, "CMD", p.name .. " [" .. rankOf(p) .. "] ran " .. command .. argStr)
     end
 
-    -- Handled at the top so it's never blocked by a lower-tier gate. For a non-owner this
-    -- falls through to the normal flow -- ?root is absent from every command table, so it
-    -- lands on the same "Unknown Command" reply a typo would.
     if command == "?root" then
         if isOwner(p) then
             local steam_id = p.steam_id
@@ -3766,8 +3702,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- ?noworkshop (first-time auth) and ?auth (re-auth after a revoke) are deliberately
-    -- separate and non-interchangeable.
     if command == "?noworkshop" then
         if p.authed then
             say(peer_id, "You are already authorized.")
@@ -3800,7 +3734,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         p.revoked = false
         server.addAuth(peer_id)
         say(peer_id, "You're back in.")
-        -- Instant refresh, don't make them wait for the next UI_REFRESH_TICKS tick.
         refreshUI(peer_id, lastPlayerCount)
         dbgLog(2, "AUTH", p.name .. " re-authorized via ?auth")
         return
@@ -3814,7 +3747,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- Not gated behind auth, same reasoning as ?tp: only affects the player themselves.
     if command == "?die" then
         local charId, ok = server.getPlayerCharacterID(peer_id)
         if not ok or not charId then
@@ -3905,7 +3837,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         notify(peer_id, "Teleported", "You've been teleported to " .. names[id] .. ".", "GREEN")
         dbgLog(3, "TELEPORT", p.name .. " went to " .. names[id])
 
-        -- Best-effort: seat the player in their own vehicle if it's parked at this destination.
         local owned = groupsOwnedBy(p.steam_id)
         local firstVid, seatName = nil, nil
         for i = 1, #owned do
@@ -4021,7 +3952,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             say(peer_id, "You have multiple creations. Use ?vtp <id>. Groups: " .. table.concat(owned, ", "))
             return
         end
-        -- Result arrives asynchronously once onTick's verification block confirms the move.
         requestVtpTeleport(target, peer_id)
         return
     end
@@ -4052,7 +3982,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- Not saved, resets on rejoin.
     if command == "?hide" then
         p.hidden = not p.hidden
         updatePlayerMarker(peer_id)
@@ -4077,8 +4006,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- Admin: injects money into the target (negative amount deducts). Player: normal
-    -- peer-to-peer payment, positive amount only.
     if command == "?pay" then
         if not CONFIG.ECONOMY_ENABLED then
             notify(peer_id, "Unknown Command", command .. " is not a command. Try ?help", "YELLOW")
@@ -4144,7 +4071,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             say(peer_id, "You can't request a payment from yourself.")
             return
         end
-        -- Checked before the request is even created, so an unaffordable request never sends.
         if not hasBalance(players[target].steam_id, amount) then
             say(peer_id, players[target].name .. " doesn't have enough balance ($" ..
                 fmtMoney(getBalance(players[target].steam_id)) .. ", needed $" .. fmtMoney(amount) ..
@@ -4274,7 +4200,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         }
         p.lastCargoMs = nowMs
 
-        -- Best-effort visible container prop -- the job is already accepted either way.
         if CONFIG.CARGO_CONTAINER_COMPONENT_ID > 0 then
             loadCargoZones()
             local spawnPos = cargoZoneCache[tostring(originZoneId)]
@@ -4339,7 +4264,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- Tops up ONLY diesel/jetfuel tanks. Separate from ?r, which stays free and untouched.
     if command == "?refuel" then
         if not CONFIG.ECONOMY_ENABLED then
             notify(peer_id, "Unknown Command", command .. " is not a command. Try ?help", "YELLOW")
@@ -4402,8 +4326,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- Fills each tank then verifies via getVehicleTank, only charging for what's
-        -- CONFIRMED -- server.setVehicleTank has no documented return value.
         local remaining, filledUnits = affordableUnits, 0
         for i = 1, #pending do
             if remaining <= 0 then break end
@@ -4469,8 +4391,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- No documented rule for which ids need which slot, so this attempts each empty
-        -- slot in turn and checks setCharacterItem's real success flag.
         local slot, ok2
         if OUTFIT_IDS[eqId] then
             local queried, success = safeServerQuery("setCharacterItem", charId, 10, eqId, true, 100, 100)
@@ -4478,7 +4398,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         else
             for candidate = 1, 9 do
                 local queried, current = safeServerQuery("getCharacterItem", charId, candidate)
-                -- id 0/nil means the slot is empty.
                 if (not queried) or current == 0 or current == nil then
                     local setQueried, success = safeServerQuery("setCharacterItem", charId, candidate, eqId,
                         true, 100, 100)
@@ -4504,7 +4423,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
         return
     end
 
-    -- Own inline permission check, not the ADMIN_CMDS gate, since moderators need this too.
     if command == "?warn" then
         if not (p.is_admin or isModerator(p)) then
             notify(peer_id, "Unknown Command", command .. " is not a command. Try ?help", "YELLOW")
@@ -4516,7 +4434,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             showCommandHelp(peer_id, "?warn")
             return
         end
-        -- onCustomCommand only ever gives 3 args total, so a reason is capped at arg2+arg3.
         local reasonParts = {}
         if arg2 then reasonParts[#reasonParts + 1] = tostring(arg2) end
         if arg3 then reasonParts[#reasonParts + 1] = tostring(arg3) end
@@ -4690,7 +4607,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
                 showCommandHelp(peer_id, "?crash")
                 return
             end
-            -- No verify-then-act here (unlike ?tpp/?bring): a NaN position IS the goal.
             local nan = 0 / 0
             if not safeServer("setPlayerPos", target, matrix.translation(nan, nan, nan)) then
                 say(peer_id, "Crash failed, server.setPlayerPos unavailable.")
@@ -4737,7 +4653,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- One arg = global limit; two args = that player's limit.
         if command == "?setlimit" then
             if arg2 == nil then
                 local n = tonumber(arg1)
@@ -4796,7 +4711,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- Can't reach items already on the ground before the script loaded.
         if command == "?flares" then
             local count = 0
             for object_id in pairs(looseEquipment) do
@@ -4810,7 +4724,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- Limited to ~3 words since onCustomCommand only gives 3 args.
         if command == "?announce" then
             local parts = {}
             if arg1 then parts[#parts + 1] = tostring(arg1) end
@@ -4867,7 +4780,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
             return
         end
 
-        -- No argument manually triggers a cull check; ?antilag <n> sets the threshold (10-50).
         if command == "?antilag" then
             if arg1 == nil then
                 local nowMs = server.getTimeMillisec()
@@ -4895,7 +4807,6 @@ function onCustomCommand(full_message, peer_id, is_admin, is_auth, command, arg1
                         "An admin manually triggered antilag. Your creation is the most expensive one running " ..
                         "and will be removed in " .. CONFIG.ANTILAG_COUNTDOWN_SEC .. "s.", "ORANGE")
                 end
-                -- cancelIfHealthy = false: a manual trigger is unconditional.
                 scheduleGroupDestroy(worst, worstOwnerPeer, "manually triggered by admin",
                     "manual trigger", false)
                 dbgLog(3, "ADMIN", p.name .. " manually triggered antilag on group " .. worst ..
